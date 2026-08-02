@@ -176,6 +176,10 @@ public class RecommendResponseAgentService {
                 long mealId = node.path("mealId").isMissingNode() ? node.path("itemId").asLong() : node.path("mealId").asLong();
                 String reason = node.path("reason").asText("");
                 // 只采纳候选内且 reason 非空的项
+                if (reason.length() > 200) {
+                    reason = reason.substring(0, 200).trim();
+                }
+                reason = OutputSafetyGuard.sanitizeSpeech(reason);
                 if (byId.containsKey(mealId) && !reason.isBlank()) {
                     reasons.put(mealId, reason);
                 }

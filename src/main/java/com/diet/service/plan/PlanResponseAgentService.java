@@ -141,6 +141,10 @@ public class PlanResponseAgentService {
             plansNode.forEach(node -> {
                 String mealTime = node.path("mealTime").asText("").trim();
                 String reason = node.path("reason").asText("").trim();
+                if (reason.length() > 200) {
+                    reason = reason.substring(0, 200).trim();
+                }
+                reason = OutputSafetyGuard.sanitizeSpeech(reason);
                 if (!mealTime.isBlank() && !reason.isBlank()) {
                     reasonsByMealTime.put(mealTime, reason);
                 }
