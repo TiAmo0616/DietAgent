@@ -49,6 +49,15 @@ public class MealService {
         return mealMapper.countPersonalMeals(userId) > 0; // 查个人餐食数量是否大于 0
     }
 
+    public MealItem findAccessibleMeal(Long trustedUserId, SourceMode sourceMode, Long mealId) {
+        if (sourceMode == null || mealId == null
+                || (sourceMode == SourceMode.PERSONAL && trustedUserId == null)) {
+            throw new DietException("餐食查询参数不合法");
+        }
+        MealItemRow row = mealMapper.findAccessibleById(mealId, sourceMode, trustedUserId);
+        return row == null ? null : toMealItem(row);
+    }
+
     @Transactional
     public MealItem createPersonalMeal(Long userId, MealRequest request) {
         validateMealRequest(request);
