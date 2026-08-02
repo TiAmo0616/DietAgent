@@ -1,6 +1,8 @@
 package com.diet.service.intent;
 
 import com.diet.agent.factory.AgentFactory;
+import com.diet.context.ContextAssembler;
+import com.diet.context.ContextSnapshot;
 import com.diet.model.ConversationTurn;
 import com.diet.enums.Intent;
 import com.diet.model.IntentResult;
@@ -36,6 +38,8 @@ public class IntentAgentService {
     /** 链路追踪服务，callAgent 内部会记录 AGENT_CALL 事件。 */
     private final AgentTraceService agentTraceService;
 
+    private final ContextAssembler contextAssembler;
+
     /** IntentAgent 使用的轻量模型名，来自配置 diet.llm.light-model。 */
     private final String modelName;
 
@@ -45,12 +49,14 @@ public class IntentAgentService {
             LlmJsonService llmJsonService,
             SlotOptionService slotOptionService,
             AgentTraceService agentTraceService,
+            ContextAssembler contextAssembler,
             @Value("${diet.llm.light-model:qwen-turbo}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;
         this.slotOptionService = slotOptionService;
         this.agentTraceService = agentTraceService;
+        this.contextAssembler = contextAssembler;
         this.modelName = modelName;
     }
 
@@ -59,6 +65,12 @@ public class IntentAgentService {
      * 由 Orchestrator#handleTurn 调用，返回 IntentResult 供路由和槽位合并。
      */
     public IntentResult recognize(String sessionId, Long userId, String userInput, SlotBundle knownSlots, List<ConversationTurn> recentHistory) {
+        return recognize(sessionId, userId, userInput, knownSlots,
+                contextAssembler.assemble(userInput, knownSlots, null, recentHistory, Map.of()));
+    }
+
+    public IntentResult recognize(String sessionId, Long userId, String userInput,
+                                  SlotBundle knownSlots, ContextSnapshot context) {
         try {
             // 加载全部槽位字段的合法候选值 Map（mealTime/mood/scene 等 → 标签列表） ：把槽位字典传入prompt
             Map<String, List<String>> slotOptions = slotOptionService.findAllOptions();
@@ -69,7 +81,7 @@ public class IntentAgentService {
             agent.getMemory().clear();
             // 调用 Agent：内部走 agentTraceService.callAgent，记录 AGENT_CALL 事件（含 input/output/latency）
             Msg response = agentTraceService.callAgent(sessionId, "IntentAgent", modelName,
-                    agent, buildUserPrompt(userId, sessionId, userInput, knownSlots, recentHistory, slotOptions));
+                    agent, buildUserPrompt(userId, sessionId, context, slotOptions));
             // 解析 Agent 返回的 JSON 文本为 IntentResult（intent + slots + confidence）
             return parseResult(response.getTextContent(), userInput, slotOptions);
         } catch (Exception ignored) {
@@ -79,17 +91,17 @@ public class IntentAgentService {
     }
 
     /** 构造传给 IntentAgent 的用户 prompt，包含上下文和输出格式约束。 */
-    private String buildUserPrompt(Long userId, String sessionId, String userInput, SlotBundle knownSlots, List<ConversationTurn> recentHistory, Map<String, List<String>> slotOptions) {
+    private String buildUserPrompt(Long userId, String sessionId, ContextSnapshot context, Map<String, List<String>> slotOptions) {
         return """
                 userId: %s
                 sessionId: %s
-                recentHistory: %s
-                knownSlots: %s
+                contextBudget: %d/%d tokens
+                boundedContext: %s
                 slotOptions: %s
-                当前这一句: %s
                 请输出 JSON，字段为 intent、slots、confidence。
                 slots 必须从 slotOptions 对应字段的候选值中选择；无法映射则输出 null 或空数组，不要创造标签。
-                """.formatted(userId, sessionId, recentHistory, knownSlots, slotOptions, userInput);
+                """.formatted(userId, sessionId, context.estimatedTokens(), context.tokenBudget(),
+                context.toPromptBlock(), slotOptions);
     }
 
     /** 将 Agent 返回的 JSON 文本解析为 IntentResult。 */

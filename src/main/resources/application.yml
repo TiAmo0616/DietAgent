@@ -22,6 +22,8 @@ diet:
     light-model: ${DIET_LIGHT_MODEL:qwen-turbo}
   session:
     max-history-turns: ${DIET_MAX_HISTORY_TURNS:10}
+  context:
+    intent-token-budget: ${DIET_INTENT_CONTEXT_TOKEN_BUDGET:1800}
 logging:
   level:
     com.diet: INFO

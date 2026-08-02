@@ -1,6 +1,8 @@
 package com.diet.service.orchestrator;
 
 import com.diet.exception.DietException;
+import com.diet.context.ContextAssembler;
+import com.diet.context.ContextSnapshot;
 import com.diet.service.intent.IntentAgentService;
 import com.diet.service.intent.IntentReviseService;
 import com.diet.service.risk.RiskGuardService;
@@ -134,6 +136,8 @@ public class DietOrchestratorService {
 
     private final DietToolRegistry dietToolRegistry;
 
+    private final ContextAssembler contextAssembler;
+
     /**
      * 会话级锁 Map，key=sessionId，value=锁对象，保证同 session 串行写状态。
      */
@@ -158,10 +162,12 @@ public class DietOrchestratorService {
             RiskGuardService riskGuardService,
             AgentTraceService agentTraceService,
             SkillOrchestrationService skillOrchestrationService,
-            DietToolRegistry dietToolRegistry
+            DietToolRegistry dietToolRegistry,
+            ContextAssembler contextAssembler
     ) {
         this.skillOrchestrationService = skillOrchestrationService;
         this.dietToolRegistry = dietToolRegistry;
+        this.contextAssembler = contextAssembler;
         this.sessionService = sessionService;                           // 注入消息落库服务
         this.sessionStateService = sessionStateService;                 // 注入会话状态服务
         this.intentAgentService = intentAgentService;                   // 注入意图识别服务
@@ -249,7 +255,15 @@ public class DietOrchestratorService {
         }
 
         // 意图识别：调用 IntentAgent：传入 sessionId、userId、用户原文、历史槽位、最近 3 条对话摘要
-        IntentResult rawIntent = intentAgentService.recognize(sessionId, userId, request.message(), state.slots(), sessionService.recentConversationTurns(sessionId, userId, 3));
+        List<com.diet.model.ConversationTurn> recentTurns = sessionService.recentConversationTurns(sessionId, userId, 3);
+        ContextSnapshot context = contextAssembler.assemble(
+                request.message(), state.slots(), state, recentTurns, request.context());
+        agentTraceService.recordEvent("CONTEXT_ASSEMBLED", "CONTEXT",
+                request.message(), Map.of("layers", List.of("CURRENT_REQUEST", "SESSION_STATE", "RECENT_TURNS", "REQUEST_CONTEXT"),
+                        "estimatedTokens", context.estimatedTokens(),
+                        "tokenBudget", context.tokenBudget(),
+                        "recentTurnsIncluded", context.recentTurns().size()));
+        IntentResult rawIntent = intentAgentService.recognize(sessionId, userId, request.message(), state.slots(), context);
         // Trace 事件：INTENT_RECOGNIZED | 阶段 INTENT | 输入=用户原文 | 输出=IntentResult（intent/slots/confidence）
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
 
