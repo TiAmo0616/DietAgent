@@ -5,6 +5,7 @@ import com.diet.enums.SourceMode;
 import com.diet.model.*;
 import com.diet.service.recommend.RecommendResponseAgentService;
 import com.diet.service.trace.AgentTraceService;
+import com.diet.service.safety.OutputSafetyGuard;
 import com.diet.skill.model.SkillExecutionContext;
 import com.diet.util.LlmJsonService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -158,6 +159,10 @@ public class PlanResponseAgentService {
         }
 
         String speechText = root.path("speechText").asText("").trim();
+        if (speechText.length() > 1000) {
+            speechText = speechText.substring(0, 1000).trim();
+        }
+        speechText = OutputSafetyGuard.sanitizeSpeech(speechText);
         if (speechText.isBlank()) {
             speechText = templateSpeech(plannedMeals, new RecommendResult(options, needsDisclaimer(sharedSlots)));
         }
