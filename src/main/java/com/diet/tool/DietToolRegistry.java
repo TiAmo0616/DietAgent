@@ -14,12 +14,16 @@ import com.diet.skill.SkillPolicyService;
 import com.diet.skill.model.SkillExecutionContext;
 import com.diet.model.ToolTracePayload;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.List;
 import java.util.Map;
 
 @Service
 public class DietToolRegistry {
+
+    @Value("${diet.tool.max-retries:1}")
+    private int maxRetries;
 
     private final MealSearchService mealSearchService;
     private final MealRankService mealRankService;
@@ -53,8 +57,28 @@ public class DietToolRegistry {
         }
         traceService.recordToolEvent("TOOL_CALL_AUTHORIZED", tracePayload(call, context, "AUTHORIZED", null, null, null));
         long startedAt = System.nanoTime();
-        try {
-            Object data = switch (call.toolName()) {
+        int attempts = Math.max(0, maxRetries) + 1;
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                Object data = dispatch(call, context);
+                long latencyMs = elapsedMs(startedAt);
+                int resultCount = resultCount(data);
+                traceService.recordToolEvent("TOOL_CALL_SUCCEEDED",
+                        tracePayload(call, context, "SUCCEEDED", resultCount, latencyMs, null));
+                return new DietToolResult(call.toolName(), data, resultCount, latencyMs);
+            } catch (RuntimeException error) {
+                if (!retryable(error) || attempt == attempts) {
+                    traceService.recordToolEvent("TOOL_CALL_FAILED",
+                            tracePayload(call, context, "FAILED", null, elapsedMs(startedAt), error));
+                    throw error;
+                }
+            }
+        }
+        throw new DietException("工具执行失败");
+    }
+
+    private Object dispatch(DietToolCall call, ToolCallContext context) {
+        return switch (call.toolName()) {
                 case SEARCH_MEALS -> search(((DietToolCall.SearchMeals) call).request(), context);
                 case RANK_MEALS -> rank(((DietToolCall.RankMeals) call).request());
                 case GET_MEAL_DETAIL -> detail(((DietToolCall.GetMealDetail) call).mealId(), context);
@@ -63,17 +87,11 @@ public class DietToolRegistry {
                     DietToolCall.CheckHealthRisk risk = (DietToolCall.CheckHealthRisk) call;
                     yield riskGuardService.check(risk.userInput(), risk.intent(), risk.recommendResult(), risk.responseResult());
                 }
-            };
-            long latencyMs = elapsedMs(startedAt);
-            int resultCount = resultCount(data);
-            traceService.recordToolEvent("TOOL_CALL_SUCCEEDED",
-                    tracePayload(call, context, "SUCCEEDED", resultCount, latencyMs, null));
-            return new DietToolResult(call.toolName(), data, resultCount, latencyMs);
-        } catch (RuntimeException error) {
-            traceService.recordToolEvent("TOOL_CALL_FAILED",
-                    tracePayload(call, context, "FAILED", null, elapsedMs(startedAt), error));
-            throw error;
-        }
+        };
+    }
+
+    private boolean retryable(RuntimeException error) {
+        return !(error instanceof DietException);
     }
 
     private Object search(MealSearchRequest request, ToolCallContext context) {

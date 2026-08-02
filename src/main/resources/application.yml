@@ -27,6 +27,8 @@ diet:
   idempotency:
     ttl-seconds: ${DIET_IDEMPOTENCY_TTL_SECONDS:600}
     max-entries: ${DIET_IDEMPOTENCY_MAX_ENTRIES:10000}
+  tool:
+    max-retries: ${DIET_TOOL_MAX_RETRIES:1}
 logging:
   level:
     com.diet: INFO

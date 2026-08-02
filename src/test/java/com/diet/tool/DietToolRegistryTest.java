@@ -18,10 +18,31 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 class DietToolRegistryTest {
+
+    @Test
+    void retriesTransientToolFailureButNotPolicyErrors() throws Exception {
+        MealSearchService searchService = mock(MealSearchService.class);
+        org.mockito.Mockito.when(searchService.search(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalStateException("temporary"))
+                .thenReturn(List.of());
+        DietToolRegistry registry = new DietToolRegistry(searchService, mock(MealRankService.class),
+                mock(MealService.class), mock(SlotOptionService.class), mock(RiskGuardService.class),
+                new SkillPolicyService(), mock(AgentTraceService.class));
+        var field = DietToolRegistry.class.getDeclaredField("maxRetries");
+        field.setAccessible(true);
+        field.setInt(registry, 1);
+        ToolCallContext context = new ToolCallContext(7L, "trace-retry", SourceMode.PUBLIC, ToolCallSource.INTERNAL,
+                new SkillExecutionContext("meal-recommendation", "v1", "", Set.of(DietToolName.SEARCH_MEALS.wireName())));
+
+        assertDoesNotThrow(() -> registry.call(new DietToolCall.SearchMeals(
+                new com.diet.model.MealSearchRequest(SourceMode.PUBLIC, null, SlotBundle.empty(), List.of())), context));
+        org.mockito.Mockito.verify(searchService, org.mockito.Mockito.times(2)).search(org.mockito.ArgumentMatchers.any());
+    }
 
     @Test
     void deniedToolDoesNotCallBusinessService() {
