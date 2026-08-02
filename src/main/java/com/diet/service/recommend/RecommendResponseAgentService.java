@@ -8,6 +8,7 @@ import com.diet.model.RecommendResult;
 import com.diet.model.RecommendedMealOption;
 import com.diet.model.ResponseResult;
 import com.diet.model.SlotBundle;
+import com.diet.skill.model.SkillExecutionContext;
 import com.diet.service.trace.AgentTraceService;
 import com.diet.util.LlmJsonService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -73,6 +74,16 @@ public class RecommendResponseAgentService {
             SourceMode sourceMode,
             SlotBundle slots,
             List<MealItem> rankedMeals) {
+        return recommendAndRespond(sessionId, userInput, sourceMode, slots, rankedMeals, null);
+    }
+
+    public Result recommendAndRespond(
+            String sessionId,
+            String userInput,
+            SourceMode sourceMode,
+            SlotBundle slots,
+            List<MealItem> rankedMeals,
+            SkillExecutionContext skillContext) {
         // 取重排结果 top3 作为 LLM 输入候选（不允许编造候选之外的餐食）
         List<MealItem> topMeals = rankedMeals == null ? List.of() : rankedMeals.stream().limit(3).toList();
 
@@ -95,7 +106,7 @@ public class RecommendResponseAgentService {
                     "RecommendResponseAgent",
                     modelName,
                     agent,
-                    buildUserPrompt(userInput, sourceMode, slots, topMeals)
+                    appendSkillInstructions(buildUserPrompt(userInput, sourceMode, slots, topMeals), skillContext)
             );
             // 解析 Agent JSON 输出为 recommendations + speechText
             ParsedOutput parsed = parseOutput(response.getTextContent(), topMeals, slots);
@@ -125,6 +136,13 @@ public class RecommendResponseAgentService {
                 候选餐食：%s
                 请输出 JSON，包含 recommendations 数组（每项 mealId + reason）和 speechText，不要编造候选之外的餐食。
                 """.formatted(userInput, sourceMode, slots, topMeals);
+    }
+
+    private String appendSkillInstructions(String prompt, SkillExecutionContext skillContext) {
+        if (skillContext == null || skillContext.instructions().isBlank()) {
+            return prompt;
+        }
+        return prompt + "\n<skill_constraints>\n" + skillContext.instructions() + "\n</skill_constraints>";
     }
 
     /**

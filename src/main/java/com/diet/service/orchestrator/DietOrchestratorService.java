@@ -31,6 +31,13 @@ import com.diet.service.session.SessionService;
 import com.diet.service.session.SessionStateService;
 import com.diet.service.slot.SlotMergeService;
 import com.diet.service.trace.AgentTraceService;
+import com.diet.skill.SkillOrchestrationService;
+import com.diet.skill.model.SkillExecutionContext;
+import com.diet.tool.DietToolCall;
+import com.diet.tool.DietToolRegistry;
+import com.diet.tool.DietToolResult;
+import com.diet.tool.ToolCallContext;
+import com.diet.tool.ToolCallSource;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -123,6 +130,10 @@ public class DietOrchestratorService {
      */
     private final AgentTraceService agentTraceService;
 
+    private final SkillOrchestrationService skillOrchestrationService;
+
+    private final DietToolRegistry dietToolRegistry;
+
     /**
      * 会话级锁 Map，key=sessionId，value=锁对象，保证同 session 串行写状态。
      */
@@ -145,8 +156,12 @@ public class DietOrchestratorService {
             PlanResponseAgentService planResponseAgentService,
             MealService mealService,
             RiskGuardService riskGuardService,
-            AgentTraceService agentTraceService
+            AgentTraceService agentTraceService,
+            SkillOrchestrationService skillOrchestrationService,
+            DietToolRegistry dietToolRegistry
     ) {
+        this.skillOrchestrationService = skillOrchestrationService;
+        this.dietToolRegistry = dietToolRegistry;
         this.sessionService = sessionService;                           // 注入消息落库服务
         this.sessionStateService = sessionStateService;                 // 注入会话状态服务
         this.intentAgentService = intentAgentService;                   // 注入意图识别服务
@@ -243,6 +258,8 @@ public class DietOrchestratorService {
         // Trace 事件：INTENT_REVISED | 阶段 INTENT | 输入=矫正前 rawIntent | 输出=矫正后 intent
         agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
 
+        SkillExecutionContext skillContext = skillOrchestrationService.resolve(intent.intent()).orElse(null);
+
         // Trace 事件：ROUTE_SELECTED | 阶段 ROUTE | 输入=最终 intent | 输出=路由目标 intent 枚举名
         agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));
 
@@ -250,11 +267,11 @@ public class DietOrchestratorService {
         return switch (intent.intent()) {
             // 推荐或需澄清：走推荐主链路（澄清由 ClarifyAgent 内部决定）
             case MEAL_RECOMMENDATION, CLARIFY_NEEDED ->
-                    handleRecommendation(sessionId, userId, request.message(), traceId, state, intent);
+                    handleRecommendation(sessionId, userId, request.message(), traceId, state, intent, skillContext);
             // 调整上轮推荐：排除已推荐 ID，重跑推荐流水线
-            case MEAL_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent);
+            case MEAL_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent, skillContext);
             // 多餐规划：按餐次拆分检索后统一包装
-            case MEAL_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent);
+            case MEAL_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent, skillContext);
             // 健康风险：返回 NutritionGuard 保守提示，不走推荐
             case HEALTH_RISK -> handleHealthRisk(sessionId, traceId, state);
             // 其他无关饮食的内容：返回固定引导文案
@@ -265,7 +282,8 @@ public class DietOrchestratorService {
     /**
      * 推荐主链路：合并槽位 → ClarifyAgent 判追问 → 槽位足够则进入 completeRecommendation。
      */
-    private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
+    private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent,
+                                              SkillExecutionContext skillContext) {
         // 将历史 slots 与 IntentAgent 本轮识别的 slots 合并（本轮非空覆盖，本轮空保留历史）
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
 
@@ -277,7 +295,7 @@ public class DietOrchestratorService {
 
         // 【重要】不能完全依靠agent的意图识别,在进入推荐之前,规则层面上也需要判断是否有足够的信息
         // 调用 ClarifyAgent：规则层先判缺失槽位，不足则 LLM 生成追问文案
-        ClarifyResult clarify = clarifyAgentService.decide(sessionId, userInput, mergedSlots);
+        ClarifyResult clarify = clarifyAgentService.decide(sessionId, userInput, mergedSlots, skillContext);
         // Trace 事件：CLARIFY_DECISION | 阶段 CLARIFY | 输入=mergedSlots | 输出=ClarifyResult（ASK/READY）
         agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY", mergedSlots, clarify);
 
@@ -287,7 +305,7 @@ public class DietOrchestratorService {
             return completeAsk(sessionId, traceId, workingState, clarify);
         }
         // 槽位足够：phase 切 RECOMMEND，excludeMealIds 为空
-        return completeRecommendation(sessionId, userId, userInput, traceId, workingState.withPhase(SessionPhase.RECOMMEND), List.of());
+        return completeRecommendation(sessionId, userId, userInput, traceId, workingState.withPhase(SessionPhase.RECOMMEND), List.of(), skillContext);
     }
 
     private ChatResponse completeAsk(String sessionId, String traceId, SessionState workingState, ClarifyResult clarify) {
@@ -312,7 +330,8 @@ public class DietOrchestratorService {
     /**
      * 调整链路：合并槽位 → 取 excludeMealIds → 重跑推荐流水线。
      */
-    private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
+    private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent,
+                                      SkillExecutionContext skillContext) {
         // 合并历史槽位与本轮 IntentAgent 识别的槽位
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
 
@@ -328,13 +347,14 @@ public class DietOrchestratorService {
                 .withPhase(SessionPhase.RECOMMEND);
 
         // 进入推荐流水线，仅排除已推荐餐食，实现换一批
-        return completeRecommendation(sessionId, userId, userInput, traceId, workingState, excludeMealIds);
+        return completeRecommendation(sessionId, userId, userInput, traceId, workingState, excludeMealIds, skillContext);
     }
 
     /**
      * 多餐规划链路：合并槽位 → 解析餐次 → 按餐次拆分检索重排 → 规划应答包装。
      */
-    private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
+    private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent,
+                                    SkillExecutionContext skillContext) {
         // 合并历史槽位与本轮槽位（共享口味/健康诉求等；mealTime 会在拆分时按餐次覆盖）
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
         List<String> planMealTimes = mealPlanService.resolveMealTimes(mergedSlots);
@@ -357,7 +377,7 @@ public class DietOrchestratorService {
         );
 
         SessionState workingState = state.withIntent(Intent.MEAL_PLAN).withSlots(planSlots).withPhase(SessionPhase.PLAN);
-        return completePlan(sessionId, userId, userInput, traceId, workingState, planMealTimes);
+        return completePlan(sessionId, userId, userInput, traceId, workingState, planMealTimes, skillContext);
     }
 
     /**
@@ -368,9 +388,13 @@ public class DietOrchestratorService {
                                       String userInput,
                                       String traceId,
                                       SessionState state,
-                                      List<String> planMealTimes) {
-        List<MealPlanService.PlannedMeal> plannedMeals = mealPlanService.planMeals(
-                state.sourceMode(), userId, state.slots(), planMealTimes);
+                                      List<String> planMealTimes,
+                                      SkillExecutionContext skillContext) {
+        ToolCallContext toolContext = toolContext(userId, traceId, state, skillContext);
+        List<MealPlanService.PlannedMeal> plannedMeals = skillContext == null
+                ? mealPlanService.planMeals(state.sourceMode(), userId, state.slots(), planMealTimes)
+                : mealPlanService.planMeals(state.sourceMode(), userId, state.slots(), planMealTimes,
+                dietToolRegistry, toolContext);
 
         List<Map<String, Object>> planTrace = new ArrayList<>();
         for (MealPlanService.PlannedMeal planned : plannedMeals) {
@@ -398,7 +422,7 @@ public class DietOrchestratorService {
         }
 
         RecommendResponseAgentService.Result merged = planResponseAgentService.planAndRespond(
-                sessionId, userInput, state.sourceMode(), state.slots(), plannedMeals);
+                sessionId, userInput, state.sourceMode(), state.slots(), plannedMeals, skillContext);
 
         RecommendResult recommend = merged.recommend();
         agentTraceService.recordEvent(
@@ -460,14 +484,38 @@ public class DietOrchestratorService {
     /**
      * 完整推荐流水线：检索 → 重排 → LLM 生成理由与口语回复 → Guard 审查 → 持久化并返回。
      */
-    private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state, List<Long> excludeMealIds) {
+    private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state,
+                                                List<Long> excludeMealIds, SkillExecutionContext skillContext) {
         // 构造检索请求：sourceMode + userId + 当前 slots + excludeMealIds（检索层暂不使用 exclude，在 Rank 层过滤）
-        List<MealItem> candidates = mealSearchService.search(new MealSearchRequest(state.sourceMode(), userId, state.slots(), excludeMealIds));
+        ToolCallContext toolContext = toolContext(userId, traceId, state, skillContext);
+        List<MealItem> candidates;
+        if (skillContext == null) {
+            candidates = mealSearchService.search(new MealSearchRequest(state.sourceMode(), userId, state.slots(), excludeMealIds));
+        } else {
+            try {
+                DietToolResult searchResult = dietToolRegistry.call(new DietToolCall.SearchMeals(
+                        new MealSearchRequest(state.sourceMode(), userId, state.slots(), excludeMealIds)), toolContext);
+                candidates = castMealItems(searchResult.data());
+            } catch (RuntimeException ignored) {
+                candidates = mealSearchService.search(new MealSearchRequest(state.sourceMode(), userId, state.slots(), excludeMealIds));
+            }
+        }
         // Trace 事件：MEAL_SEARCHED | 阶段 SEARCH | 输入=slots | 输出=候选数量+candidates 列表
         agentTraceService.recordEvent("MEAL_SEARCHED", "SEARCH", state.slots(), Map.of("candidateCount", candidates.size(), "candidates", candidates));
 
         // 构造排序请求：候选列表 + slots + excludeMealIds，返回 top10
-        List<MealItem> ranked = mealRankService.rank(new MealRankRequest(candidates, state.slots(), excludeMealIds));
+        List<MealItem> ranked;
+        if (skillContext == null) {
+            ranked = mealRankService.rank(new MealRankRequest(candidates, state.slots(), excludeMealIds));
+        } else {
+            try {
+                DietToolResult rankResult = dietToolRegistry.call(new DietToolCall.RankMeals(
+                        new MealRankRequest(candidates, state.slots(), excludeMealIds)), toolContext);
+                ranked = castMealItems(rankResult.data());
+            } catch (RuntimeException ignored) {
+                ranked = mealRankService.rank(new MealRankRequest(candidates, state.slots(), excludeMealIds));
+            }
+        }
         // Trace 事件：MEAL_RANKED | 阶段 RANK | 输入=excludeMealIds | 输出=重排后数量+ranked 列表
         agentTraceService.recordEvent("MEAL_RANKED", "RANK", Map.of("excludeMealIds", excludeMealIds), Map.of("rankedCount", ranked.size(), "ranked", ranked));
 
@@ -485,7 +533,7 @@ public class DietOrchestratorService {
 
         // 调用 RecommendResponseAgent：top3 候选 + 用户原文 + slots → 推荐理由 + speechText + 卡片
         RecommendResponseAgentService.Result merged = recommendResponseAgentService.recommendAndRespond(
-                sessionId, userInput, state.sourceMode(), state.slots(), ranked);
+                sessionId, userInput, state.sourceMode(), state.slots(), ranked, skillContext);
 
         // 从结果中取出 RecommendResult（含 recommendations 列表和 needDisclaimer 标记）
         RecommendResult recommend = merged.recommend();
@@ -499,7 +547,17 @@ public class DietOrchestratorService {
         agentTraceService.recordEvent("RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
 
         // 调用 riskGuardService 检查用户输入 + 最终回复是否含健康风险关键词
-        RiskGuardResult guard = riskGuardService.check(userInput, state.currentIntent(), recommend, response);
+        RiskGuardResult guard;
+        if (skillContext == null) {
+            guard = riskGuardService.check(userInput, state.currentIntent(), recommend, response);
+        } else {
+            try {
+                guard = (RiskGuardResult) dietToolRegistry.call(new DietToolCall.CheckHealthRisk(
+                        userInput, state.currentIntent(), recommend, response), toolContext).data();
+            } catch (RuntimeException ignored) {
+                guard = riskGuardService.check(userInput, state.currentIntent(), recommend, response);
+            }
+        }
         // Trace 事件：NUTRITION_GUARD_CHECKED | 阶段 GUARD | 输入=intent+response | 输出=GuardResult（passed/reasons）
         agentTraceService.recordEvent("NUTRITION_GUARD_CHECKED", "GUARD", Map.of("intent", state.currentIntent(), "response", response), guard);
 
@@ -560,6 +618,18 @@ public class DietOrchestratorService {
     /**
      * 将纳秒级开始时间戳转为毫秒耗时。
      */
+    private List<MealItem> castMealItems(Object data) {
+        if (!(data instanceof List<?> values)) {
+            throw new DietException("工具返回结果类型非法");
+        }
+        return values.stream().map(MealItem.class::cast).toList();
+    }
+
+    private ToolCallContext toolContext(Long userId, String traceId, SessionState state,
+                                        SkillExecutionContext skillContext) {
+        return new ToolCallContext(userId, traceId, state.sourceMode(), ToolCallSource.INTERNAL, skillContext);
+    }
+
     private long elapsedMs(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000;
     }

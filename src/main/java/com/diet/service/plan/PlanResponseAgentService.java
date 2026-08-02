@@ -5,6 +5,7 @@ import com.diet.enums.SourceMode;
 import com.diet.model.*;
 import com.diet.service.recommend.RecommendResponseAgentService;
 import com.diet.service.trace.AgentTraceService;
+import com.diet.skill.model.SkillExecutionContext;
 import com.diet.util.LlmJsonService;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.agentscope.core.ReActAgent;
@@ -50,6 +51,17 @@ public class PlanResponseAgentService {
             SlotBundle sharedSlots,
             List<MealPlanService.PlannedMeal> plannedMeals
     ) {
+        return planAndRespond(sessionId, userInput, sourceMode, sharedSlots, plannedMeals, null);
+    }
+
+    public RecommendResponseAgentService.Result planAndRespond(
+            String sessionId,
+            String userInput,
+            SourceMode sourceMode,
+            SlotBundle sharedSlots,
+            List<MealPlanService.PlannedMeal> plannedMeals,
+            SkillExecutionContext skillContext
+    ) {
         List<MealPlanService.PlannedMeal> safePlans = plannedMeals == null ? List.of() : plannedMeals;
         List<MealPlanService.PlannedMeal> matched = safePlans.stream().filter(MealPlanService.PlannedMeal::matched).toList();
         boolean needDisclaimer = needsDisclaimer(sharedSlots);
@@ -70,7 +82,7 @@ public class PlanResponseAgentService {
                     "PlanResponseAgent",
                     modelName,
                     agent,
-                    buildUserPrompt(userInput, sourceMode, sharedSlots, safePlans)
+                    appendSkillInstructions(buildUserPrompt(userInput, sourceMode, sharedSlots, safePlans), skillContext)
             );
             ParsedOutput parsed = parseOutput(response.getTextContent(), safePlans, sharedSlots);
             RecommendResult recommend = new RecommendResult(parsed.options(), needDisclaimer);
@@ -111,6 +123,13 @@ public class PlanResponseAgentService {
                 各餐次候选：%s
                 请输出 JSON，包含 mealPlans 数组（每项 mealTime + mealId + reason）和 speechText；mealId 必须来自对应餐次候选。
                 """.formatted(userInput, sourceMode, sharedSlots, mealSection);
+    }
+
+    private String appendSkillInstructions(String prompt, SkillExecutionContext skillContext) {
+        if (skillContext == null || skillContext.instructions().isBlank()) {
+            return prompt;
+        }
+        return prompt + "\n<skill_constraints>\n" + skillContext.instructions() + "\n</skill_constraints>";
     }
 
     private ParsedOutput parseOutput(String content, List<MealPlanService.PlannedMeal> plannedMeals, SlotBundle sharedSlots) {

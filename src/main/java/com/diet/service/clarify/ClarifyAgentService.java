@@ -3,6 +3,7 @@ package com.diet.service.clarify;
 import com.diet.agent.factory.AgentFactory;
 import com.diet.model.ClarifyResult;
 import com.diet.model.SlotBundle;
+import com.diet.skill.model.SkillExecutionContext;
 import com.diet.service.trace.AgentTraceService;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
@@ -47,6 +48,11 @@ public class ClarifyAgentService {
      * 由 Orchestrator#handleRecommendation 调用，返回 ClarifyResult（ASK 或 READY）。
      */
     public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots) {
+        return decide(sessionId, userInput, slots, null);
+    }
+
+    public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots,
+                                SkillExecutionContext skillContext) {
         // 用 Java 规则计算缺失的关键槽位（mealTime、healthGoal 等）
         List<String> missingSlots = clarifyRuleService.missingSlots(slots);
         // 无缺失槽位 → 槽位足够，直接 READY，不调用 LLM
@@ -59,7 +65,8 @@ public class ClarifyAgentService {
             // 清空 Agent 内存，避免跨轮污染
             agent.getMemory().clear();
             // 调用 Agent：内部走 agentTraceService.callAgent，记录 AGENT_CALL（ClarifyAgent + light-model）
-            Msg response = agentTraceService.callAgent(sessionId, "ClarifyAgent", modelName, agent, buildUserPrompt(userInput, slots, missingSlots));
+            Msg response = agentTraceService.callAgent(sessionId, "ClarifyAgent", modelName, agent,
+                    appendSkillInstructions(buildUserPrompt(userInput, slots, missingSlots), skillContext));
             // 提取 Agent 返回的追问文案并 trim
             String question = response.getTextContent() == null ? "" : response.getTextContent().trim();
             // LLM 返回空文本时，用 ClarifyRule 模板追问兜底
@@ -81,5 +88,12 @@ public class ClarifyAgentService {
                 已知信息：%s
                 缺失字段：%s
                 """.formatted(userInput, slots, missingSlots);
+    }
+
+    private String appendSkillInstructions(String prompt, SkillExecutionContext skillContext) {
+        if (skillContext == null || skillContext.instructions().isBlank()) {
+            return prompt;
+        }
+        return prompt + "\n<skill_constraints>\n" + skillContext.instructions() + "\n</skill_constraints>";
     }
 }

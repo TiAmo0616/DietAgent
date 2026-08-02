@@ -7,6 +7,10 @@ import com.diet.model.MealSearchRequest;
 import com.diet.model.SlotBundle;
 import com.diet.service.meal.MealRankService;
 import com.diet.service.meal.MealSearchService;
+import com.diet.tool.DietToolCall;
+import com.diet.tool.DietToolRegistry;
+import com.diet.tool.DietToolResult;
+import com.diet.tool.ToolCallContext;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -99,6 +103,46 @@ public class MealPlanService {
             }
         }
         return planned;
+    }
+
+    public List<PlannedMeal> planMeals(SourceMode sourceMode, Long userId, SlotBundle baseSlots,
+                                       List<String> mealTimes, DietToolRegistry toolRegistry,
+                                       ToolCallContext toolContext) {
+        List<String> targets = mealTimes == null || mealTimes.isEmpty() ? DEFAULT_PLAN_MEAL_TIMES : mealTimes;
+        List<PlannedMeal> planned = new ArrayList<>();
+        Set<Long> usedIds = new LinkedHashSet<>();
+        for (String mealTime : targets) {
+            SlotBundle querySlots = slotsForMealTime(baseSlots, mealTime);
+            List<Long> excludeIds = List.copyOf(usedIds);
+            List<MealItem> candidates;
+            List<MealItem> ranked;
+            try {
+                DietToolResult searchResult = toolRegistry.call(new DietToolCall.SearchMeals(
+                        new MealSearchRequest(sourceMode, userId, querySlots, excludeIds)), toolContext);
+                candidates = castMeals(searchResult.data());
+                DietToolResult rankResult = toolRegistry.call(new DietToolCall.RankMeals(
+                        new MealRankRequest(candidates, querySlots, excludeIds)), toolContext);
+                ranked = castMeals(rankResult.data());
+            } catch (RuntimeException ignored) {
+                candidates = mealSearchService.search(new MealSearchRequest(sourceMode, userId, querySlots, excludeIds));
+                ranked = mealRankService.rank(new MealRankRequest(candidates, querySlots, excludeIds));
+            }
+            MealItem picked = ranked.stream()
+                    .filter(item -> item != null && item.id() != null && !usedIds.contains(item.id()))
+                    .findFirst().orElse(null);
+            if (picked != null) {
+                usedIds.add(picked.id());
+            }
+            planned.add(new PlannedMeal(mealTime, picked, querySlots));
+        }
+        return planned;
+    }
+
+    private List<MealItem> castMeals(Object data) {
+        if (!(data instanceof List<?> values)) {
+            throw new IllegalStateException("工具返回结果类型非法");
+        }
+        return values.stream().map(MealItem.class::cast).toList();
     }
 
     /**
