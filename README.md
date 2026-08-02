@@ -1,8 +1,10 @@
-# Diet-Agent V1
+# Diet-Agent V2 第一阶段（Skill + 统一工具注册中心）
+
+本分支在 V1 的确定性编排基础上，已实现 Skill 资源解析、固定意图路由、按需加载、工具授权和工具调用 Trace。V2 的上下文工程、长期记忆、MCP、PostgreSQL + pgvector 和分布式并发治理仍未实现。
 
 基于 Java、Spring Boot 与 AgentScope 构建的多轮饮食推荐智能体。系统采用“**Java 确定性编排 + 专业智能体推理**”的分层架构，将意图理解、槽位澄清、真实候选检索、规则排序、回复生成、健康风险控制、链路追踪和离线评估组合成一条可回溯的业务链路。
 
-> 当前仓库对应 **V1 已实现版本**。Skill、MCP、PostgreSQL + pgvector、跨会话长期记忆等内容属于 V2 演进方向，尚未包含在当前代码中。
+> 当前仓库在 V1 业务闭环上已实现 V2 第一阶段的 Skill 与统一工具注册中心；MCP、PostgreSQL + pgvector、跨会话长期记忆等内容仍未包含在当前代码中。
 
 ## 目录
 
@@ -426,22 +428,48 @@ V1 已具备完整业务闭环，但仍有以下工程限制：
 5. 当前只有会话内状态，没有经过治理的跨会话长期记忆。
 6. Trace 使用线程本地作用域，尚未接入跨线程、跨服务的标准追踪上下文。
 7. 反馈按会话近似关联 Trace，降级评分也没有评价兜底回复本身的质量。
-8. 当前仓库没有自动化测试源码，需要补充单元、集成、回归和故障注入测试。
+8. 当前已补充 Skill、工具策略和编排回归测试；完整的故障注入、Testcontainers 和端到端测试仍属于后续工作。
 
 ## V2 演进方向
 
-以下内容是后续规划，不属于当前 V1 已实现能力：
+当前分支已完成 V2 第一阶段：Skill 领域能力和统一工具注册中心。以下内容仍是后续规划：
 
 - 拆分大型编排服务，将智能体改造成无状态执行单元；
 - 引入 Token 预算驱动的上下文工程和受控分层记忆；
 - 迁移到 PostgreSQL + pgvector，统一关系数据与语义记忆；
-- 将稳定领域流程封装为 Skill，并建设统一工具注册中心；
 - 通过 MCP 标准开放受控的公共只读能力；
 - 使用 JWT、请求幂等、会话版本乐观锁和行级安全支持多实例部署；
-- 接入 OpenTelemetry、Micrometer、Testcontainers 和完整自动化测试体系；
+- 接入 OpenTelemetry、Micrometer、Testcontainers 和完整端到端测试体系；
 - 对评估权重、提示词、指标和降级质量进行版本化治理。
 
 V2 的目标不是把系统改成完全自治智能体，而是在保留 V1“模型推理、后端控制”主线的基础上，提高可扩展性、可治理性和分布式运行能力。
+
+## V2 第一阶段实现说明
+
+### Skill 能力
+
+Skill 文件位于 `src/main/resources/diet/skills/`，当前包含：
+
+- `meal-recommendation`：单餐推荐与必要澄清；
+- `meal-adjustment`：排除上一轮候选后的调整推荐；
+- `meal-planning`：按餐次拆分并生成多餐计划；
+- `health-risk-response`：健康风险安全回复。
+
+`SkillRouter` 使用后端固定映射选择 Skill，`SkillLoader` 只在命中后读取正文。Skill 正文只描述领域约束和允许工具，不能覆盖后端状态机、候选 ID 校验或健康风险规则。
+
+### 统一工具注册中心
+
+`DietToolRegistry` 统一处理五类只读业务工具：`search_meals`、`rank_meals`、`get_meal_detail`、`get_slot_options`、`check_health_risk`。调用顺序为：可信上下文校验 → Skill 工具授权 → 参数校验 → `PUBLIC/PERSONAL` 数据隔离 → 现有 Java Service → 结果审计。
+
+工具调用使用后端注入的用户 ID、数据源模式和 Trace ID，不接受模型自行声明的身份信息。Skill 或工具异常时，编排层回退到 V1 的规则和模板路径。
+
+### 新增测试
+
+当前新增 15 个测试，覆盖 frontmatter 解析、Skill 路由和降级、工具授权、个人数据归属、在线编排接入、提示词约束隔离和 Trace 敏感信息过滤。运行命令：
+
+```powershell
+& 'D:\diet-agent\.tools\apache-maven-3.9.16\bin\mvn.cmd' '-Dmaven.repo.local=D:\diet-agent\.m2' test
+```
 
 ## License
 

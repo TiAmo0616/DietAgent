@@ -259,6 +259,10 @@ public class DietOrchestratorService {
         agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
 
         SkillExecutionContext skillContext = skillOrchestrationService.resolve(intent.intent()).orElse(null);
+        agentTraceService.recordSkillEvent(skillContext == null ? "SKILL_FALLBACK" : "SKILL_ROUTED", skillContext, intent.intent());
+        if (skillContext != null) {
+            agentTraceService.recordSkillEvent("SKILL_LOADED", skillContext, intent.intent());
+        }
 
         // Trace 事件：ROUTE_SELECTED | 阶段 ROUTE | 输入=最终 intent | 输出=路由目标 intent 枚举名
         agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));

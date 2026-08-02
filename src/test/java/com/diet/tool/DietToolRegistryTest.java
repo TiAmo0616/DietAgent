@@ -11,6 +11,7 @@ import com.diet.service.risk.RiskGuardService;
 import com.diet.service.slot.SlotOptionService;
 import com.diet.skill.model.SkillExecutionContext;
 import com.diet.skill.SkillPolicyService;
+import com.diet.service.trace.AgentTraceService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -27,7 +28,7 @@ class DietToolRegistryTest {
         MealSearchService searchService = mock(MealSearchService.class);
         DietToolRegistry registry = new DietToolRegistry(searchService, mock(MealRankService.class),
                 mock(MealService.class), mock(SlotOptionService.class), mock(RiskGuardService.class),
-                new SkillPolicyService());
+                new SkillPolicyService(), mock(AgentTraceService.class));
         ToolCallContext context = new ToolCallContext(7L, "trace-test", SourceMode.PUBLIC, ToolCallSource.INTERNAL,
                 new SkillExecutionContext("health-risk-response", "v1", "", Set.of(DietToolName.CHECK_HEALTH_RISK.wireName())));
 
@@ -44,7 +45,7 @@ class DietToolRegistryTest {
                 .thenReturn(List.of(new MealItem(1L, SourceMode.PUBLIC, null, "meal", SlotBundle.empty(), 0)));
         DietToolRegistry registry = new DietToolRegistry(searchService, mock(MealRankService.class),
                 mock(MealService.class), mock(SlotOptionService.class), mock(RiskGuardService.class),
-                new SkillPolicyService());
+                new SkillPolicyService(), mock(AgentTraceService.class));
         ToolCallContext context = new ToolCallContext(7L, "trace-test", SourceMode.PUBLIC, ToolCallSource.INTERNAL,
                 new SkillExecutionContext("meal-recommendation", "v1", "", Set.of(DietToolName.SEARCH_MEALS.wireName())));
 

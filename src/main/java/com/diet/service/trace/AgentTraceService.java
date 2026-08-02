@@ -4,6 +4,9 @@ import com.diet.mapper.AgentTraceMapper;
 import com.diet.exception.DietException;
 import com.diet.model.TraceLabelRequest;
 import com.diet.model.RequestTraceRow;
+import com.diet.model.ToolTracePayload;
+import com.diet.enums.Intent;
+import com.diet.skill.model.SkillExecutionContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
@@ -90,6 +93,18 @@ public class AgentTraceService {
     public void recordError(String eventType, String phase, Object inputPayload, Exception error) {
         // outputPayload 为 null，error 非 null 时会触发 scope.markFailed
         record(eventType, phase, null, null, inputPayload, null, null, null, null, null, error);
+    }
+
+    public void recordSkillEvent(String eventType, SkillExecutionContext skill, Intent intent) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("skillName", skill == null ? null : skill.skillName());
+        payload.put("skillVersion", skill == null ? null : skill.skillVersion());
+        payload.put("intent", intent == null ? null : intent.name());
+        record(eventType, "SKILL", null, null, payload, null, null, null, null, null, null);
+    }
+
+    public void recordToolEvent(String eventType, ToolTracePayload payload) {
+        record(eventType, "TOOL", null, null, payload, null, payload.latencyMs(), null, null, null, null);
     }
 
     /**

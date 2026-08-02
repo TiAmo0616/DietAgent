@@ -9,7 +9,10 @@ import com.diet.service.meal.MealSearchService;
 import com.diet.service.meal.MealService;
 import com.diet.service.risk.RiskGuardService;
 import com.diet.service.slot.SlotOptionService;
+import com.diet.service.trace.AgentTraceService;
 import com.diet.skill.SkillPolicyService;
+import com.diet.skill.model.SkillExecutionContext;
+import com.diet.model.ToolTracePayload;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -24,33 +27,53 @@ public class DietToolRegistry {
     private final SlotOptionService slotOptionService;
     private final RiskGuardService riskGuardService;
     private final SkillPolicyService policyService;
+    private final AgentTraceService traceService;
 
     public DietToolRegistry(MealSearchService mealSearchService, MealRankService mealRankService,
                             MealService mealService, SlotOptionService slotOptionService,
-                            RiskGuardService riskGuardService, SkillPolicyService policyService) {
+                            RiskGuardService riskGuardService, SkillPolicyService policyService,
+                            AgentTraceService traceService) {
         this.mealSearchService = mealSearchService;
         this.mealRankService = mealRankService;
         this.mealService = mealService;
         this.slotOptionService = slotOptionService;
         this.riskGuardService = riskGuardService;
         this.policyService = policyService;
+        this.traceService = traceService;
     }
 
     public DietToolResult call(DietToolCall call, ToolCallContext context) {
         validateContext(call, context);
-        policyService.requireAllowed(context.skill(), call.toolName());
+        traceService.recordToolEvent("TOOL_CALL_REQUESTED", tracePayload(call, context, "REQUESTED", null, null, null));
+        try {
+            policyService.requireAllowed(context.skill(), call.toolName());
+        } catch (RuntimeException error) {
+            traceService.recordToolEvent("TOOL_CALL_DENIED", tracePayload(call, context, "DENIED", null, null, error));
+            throw error;
+        }
+        traceService.recordToolEvent("TOOL_CALL_AUTHORIZED", tracePayload(call, context, "AUTHORIZED", null, null, null));
         long startedAt = System.nanoTime();
-        Object data = switch (call.toolName()) {
-            case SEARCH_MEALS -> search(((DietToolCall.SearchMeals) call).request(), context);
-            case RANK_MEALS -> rank(((DietToolCall.RankMeals) call).request());
-            case GET_MEAL_DETAIL -> detail(((DietToolCall.GetMealDetail) call).mealId(), context);
-            case GET_SLOT_OPTIONS -> slotOptions();
-            case CHECK_HEALTH_RISK -> {
-                DietToolCall.CheckHealthRisk risk = (DietToolCall.CheckHealthRisk) call;
-                yield riskGuardService.check(risk.userInput(), risk.intent(), risk.recommendResult(), risk.responseResult());
-            }
-        };
-        return new DietToolResult(call.toolName(), data, resultCount(data), elapsedMs(startedAt));
+        try {
+            Object data = switch (call.toolName()) {
+                case SEARCH_MEALS -> search(((DietToolCall.SearchMeals) call).request(), context);
+                case RANK_MEALS -> rank(((DietToolCall.RankMeals) call).request());
+                case GET_MEAL_DETAIL -> detail(((DietToolCall.GetMealDetail) call).mealId(), context);
+                case GET_SLOT_OPTIONS -> slotOptions();
+                case CHECK_HEALTH_RISK -> {
+                    DietToolCall.CheckHealthRisk risk = (DietToolCall.CheckHealthRisk) call;
+                    yield riskGuardService.check(risk.userInput(), risk.intent(), risk.recommendResult(), risk.responseResult());
+                }
+            };
+            long latencyMs = elapsedMs(startedAt);
+            int resultCount = resultCount(data);
+            traceService.recordToolEvent("TOOL_CALL_SUCCEEDED",
+                    tracePayload(call, context, "SUCCEEDED", resultCount, latencyMs, null));
+            return new DietToolResult(call.toolName(), data, resultCount, latencyMs);
+        } catch (RuntimeException error) {
+            traceService.recordToolEvent("TOOL_CALL_FAILED",
+                    tracePayload(call, context, "FAILED", null, elapsedMs(startedAt), error));
+            throw error;
+        }
     }
 
     private Object search(MealSearchRequest request, ToolCallContext context) {
@@ -102,5 +125,23 @@ public class DietToolRegistry {
 
     private long elapsedMs(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000;
+    }
+
+    private ToolTracePayload tracePayload(DietToolCall call, ToolCallContext context, String status,
+                                          Integer resultCount, Long latencyMs, Exception error) {
+        return new ToolTracePayload(
+                context.skill().skillName(), context.skill().skillVersion(), call.toolName().wireName(),
+                context.source().name(), status, argumentKeys(call), resultCount, latencyMs,
+                error == null ? null : error.getClass().getSimpleName());
+    }
+
+    private List<String> argumentKeys(DietToolCall call) {
+        return switch (call.toolName()) {
+            case SEARCH_MEALS -> List.of("sourceMode", "slots", "excludeMealIds");
+            case RANK_MEALS -> List.of("candidates", "slots", "excludeMealIds");
+            case GET_MEAL_DETAIL -> List.of("mealId");
+            case GET_SLOT_OPTIONS -> List.of();
+            case CHECK_HEALTH_RISK -> List.of("intent", "recommendResult", "responseResult");
+        };
     }
 }
