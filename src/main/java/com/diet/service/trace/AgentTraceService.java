@@ -14,6 +14,8 @@ import io.agentscope.core.message.MsgRole;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -48,6 +50,9 @@ public class AgentTraceService {
 
     /** Jackson 序列化工具，将 payload 和 trace_json 转为 JSON 字符串。 */
     private final ObjectMapper objectMapper;
+
+    @Value("${diet.llm.timeout-ms:15000}")
+    private long llmTimeoutMs = 15000;
 
     /** 构造器注入 Mapper 和 ObjectMapper。 */
     public AgentTraceService(AgentTraceMapper agentTraceMapper, ObjectMapper objectMapper) {
@@ -119,7 +124,7 @@ public class AgentTraceService {
             Msg response = agent.call(Msg.builder()
                     .role(MsgRole.USER)
                     .textContent(inputText)
-                    .build()).block();
+                    .build()).block(Duration.ofMillis(Math.max(100, llmTimeoutMs)));
             // 成功：记录 AGENT_CALL 事件，input=inputText，output=response 文本，latency=耗时 ms
             recordAgentCall(sessionId, agentName, modelName, inputText, response, elapsedMs(startedAt), null);
             // 将 Agent 原始响应返回给调用方（IntentAgent/ClarifyAgent/RecommendResponseAgent）

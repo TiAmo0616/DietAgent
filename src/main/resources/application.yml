@@ -20,6 +20,7 @@ diet:
   llm:
     main-model: ${DIET_MAIN_MODEL:qwen-max}
     light-model: ${DIET_LIGHT_MODEL:qwen-turbo}
+    timeout-ms: ${DIET_LLM_TIMEOUT_MS:15000}
   session:
     max-history-turns: ${DIET_MAX_HISTORY_TURNS:10}
   context:
