@@ -116,7 +116,7 @@ public class SessionStateService {
                     readStringList(root, "taste"),
                     readStringList(root, "convenience")
             );
-            return new SessionState(
+            SessionState loaded = new SessionState(
                     row.getId(),                           // sessionId
                     row.getUserId(),                         // userId
                     parsePhase(row.getPhase()),              // phase 枚举
@@ -125,6 +125,8 @@ public class SessionStateService {
                     slots,                                   // 槽位
                     parseLongList(row.getLastRecommendations()) // 上轮推荐 ID 列表
             );
+            loaded.version(row.getVersion());
+            return loaded;
         } catch (Exception e) {
             throw new DietException("会话状态解析失败", e);
         }
@@ -140,6 +142,7 @@ public class SessionStateService {
         row.setPhase(state.phase().name());
         row.setSlots(toSlotsJson(state));                          // slots + _meta 序列化
         row.setLastRecommendations(toJson(state.lastRecommendations())); // 推荐 ID 列表 JSON
+        row.setVersion(state.version());
         return row;
     }
 

@@ -81,6 +81,7 @@ CREATE TABLE `diet_sessions`  (
   `phase` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `slots` json NOT NULL,
   `last_recommendations` json NOT NULL,
+  `version` bigint NOT NULL DEFAULT 0,
   `created_at` datetime NOT NULL,
   `updated_at` datetime NOT NULL,
   PRIMARY KEY (`id`) USING BTREE,
