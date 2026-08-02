@@ -1,4 +1,4 @@
-meal-recommendation/SKILL.md
-meal-adjustment/SKILL.md
-meal-planning/SKILL.md
-health-risk-response/SKILL.md
+diet/skills/meal-recommendation/SKILL.md
+diet/skills/meal-adjustment/SKILL.md
+diet/skills/meal-planning/SKILL.md
+diet/skills/health-risk-response/SKILL.md
