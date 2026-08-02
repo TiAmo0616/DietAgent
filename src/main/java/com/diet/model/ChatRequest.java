@@ -16,6 +16,8 @@ import lombok.experimental.Accessors;
 @AllArgsConstructor
 @NoArgsConstructor
 public class ChatRequest {
+    /** 客户端幂等键，同一用户/会话内用于去重重复提交。 */
+    private String requestId;
     private String sessionId;
     private String message;
     private SourceMode sourceMode;

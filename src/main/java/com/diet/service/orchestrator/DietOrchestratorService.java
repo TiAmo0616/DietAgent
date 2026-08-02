@@ -27,6 +27,7 @@ import com.diet.service.meal.MealRankService;
 import com.diet.service.meal.MealSearchService;
 import com.diet.service.meal.MealService;
 import com.diet.service.memory.UserMemoryService;
+import com.diet.service.idempotency.RequestIdempotencyService;
 import com.diet.service.plan.MealPlanService;
 import com.diet.service.plan.PlanResponseAgentService;
 import com.diet.service.recommend.RecommendResponseAgentService;
@@ -141,6 +142,8 @@ public class DietOrchestratorService {
 
     private final UserMemoryService userMemoryService;
 
+    private final RequestIdempotencyService idempotencyService;
+
     /**
      * 会话级锁 Map，key=sessionId，value=锁对象，保证同 session 串行写状态。
      */
@@ -167,12 +170,14 @@ public class DietOrchestratorService {
             SkillOrchestrationService skillOrchestrationService,
             DietToolRegistry dietToolRegistry,
             ContextAssembler contextAssembler,
-            UserMemoryService userMemoryService
+            UserMemoryService userMemoryService,
+            RequestIdempotencyService idempotencyService
     ) {
         this.skillOrchestrationService = skillOrchestrationService;
         this.dietToolRegistry = dietToolRegistry;
         this.contextAssembler = contextAssembler;
         this.userMemoryService = userMemoryService;
+        this.idempotencyService = idempotencyService;
         this.sessionService = sessionService;                           // 注入消息落库服务
         this.sessionStateService = sessionStateService;                 // 注入会话状态服务
         this.intentAgentService = intentAgentService;                   // 注入意图识别服务
@@ -218,8 +223,15 @@ public class DietOrchestratorService {
                 // 获取或创建该 sessionId 对应的锁对象，保证同一 session 并发请求串行执行
                 Object lock = sessionLocks.computeIfAbsent(initialState.sessionId(), key -> new Object());
                 synchronized (lock) {
+                    var cachedResponse = idempotencyService.find(userId, initialState.sessionId(), request.requestId());
+                    if (cachedResponse.isPresent()) {
+                        agentTraceService.recordEvent("REQUEST_DEDUPLICATED", "IDEMPOTENCY",
+                                request.requestId(), Map.of("sessionId", initialState.sessionId()));
+                        return cachedResponse.get();
+                    }
                     // 在锁内执行完整状态机，处理本轮用户输入
                     ChatResponse response = handleTurn(userId, request, traceId, initialState);
+                    idempotencyService.store(userId, initialState.sessionId(), request.requestId(), response);
                     // Trace 事件：REQUEST_FINISHED | 阶段 HTTP | 输入=ChatRequest | 输出=ChatResponse | 耗时 ms
                     agentTraceService.recordEvent("REQUEST_FINISHED", "HTTP", request, response, elapsedMs(startedAt));
                     // 将最终响应返回给 Controller
