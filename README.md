@@ -471,6 +471,26 @@ Skill 文件位于 `src/main/resources/diet/skills/`，当前包含：
 & 'D:\diet-agent\.tools\apache-maven-3.9.16\bin\mvn.cmd' '-Dmaven.repo.local=D:\diet-agent\.m2' test
 ```
 
+## V2 当前实现状态
+
+当前代码已经落地的 V2 能力包括：
+
+- Skill 解析、注册、固定意图路由、按需加载和工具授权；
+- 统一工具注册中心、工具 Trace、有限重试和数据归属校验；
+- Token 预算驱动的上下文组装、敏感字段过滤和近期对话裁剪；
+- 基于 MySQL 的规则校验结构化用户偏好记忆；
+- 会话版本号乐观锁；
+- 请求幂等键、请求指纹校验和单实例 TTL 去重；
+- MCP 只读工具描述、网关和工具发现接口；
+- LLM 超时控制、结构化输出边界校验和医疗承诺拦截。
+
+仍未完成的后续能力：
+
+- PostgreSQL + pgvector 语义记忆；
+- 完整 MCP stdio/HTTP 协议服务端；
+- Redis 或数据库专表实现的跨实例幂等预占与恢复；
+- JWT、行级安全策略和 OpenTelemetry 等生产级基础设施。
+
 ## License
 
 本项目采用仓库中的 [LICENSE](LICENSE) 许可。
