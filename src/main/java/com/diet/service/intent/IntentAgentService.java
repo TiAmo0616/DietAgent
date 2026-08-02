@@ -120,6 +120,10 @@ public class IntentAgentService {
 
         // 读取 confidence 字段，缺省 0.5
         double confidence = root.path("confidence").asDouble(0.5);
+        if (Double.isNaN(confidence) || Double.isInfinite(confidence)) {
+            confidence = 0.5;
+        }
+        confidence = Math.max(0.0, Math.min(1.0, confidence));
 
         // 组装并返回 IntentResult
         return new IntentResult(intent, slots, confidence);
