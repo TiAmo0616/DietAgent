@@ -17,9 +17,17 @@ public class RequestIdempotencyService {
     private record Entry(ChatResponse response, String fingerprint, Instant expiresAt) {}
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
     private final Duration ttl;
+    private final int maxEntries;
 
-    public RequestIdempotencyService(@Value("${diet.idempotency.ttl-seconds:600}") long ttlSeconds) {
+    public RequestIdempotencyService(
+            @Value("${diet.idempotency.ttl-seconds:600}") long ttlSeconds,
+            @Value("${diet.idempotency.max-entries:10000}") int maxEntries) {
         this.ttl = Duration.ofSeconds(Math.max(30, ttlSeconds));
+        this.maxEntries = Math.max(100, maxEntries);
+    }
+
+    public RequestIdempotencyService(long ttlSeconds) {
+        this(ttlSeconds, 10000);
     }
 
     public Optional<ChatResponse> find(Long userId, String sessionId, String requestId, String fingerprint) {
@@ -39,8 +47,17 @@ public class RequestIdempotencyService {
     public void store(Long userId, String sessionId, String requestId, String fingerprint, ChatResponse response) {
         String key = key(userId, sessionId, requestId);
         if (key != null && response != null) {
+            cleanupExpired();
+            if (entries.size() >= maxEntries) {
+                entries.keySet().stream().findFirst().ifPresent(entries::remove);
+            }
             entries.put(key, new Entry(response, fingerprint == null ? "" : fingerprint, Instant.now().plus(ttl)));
         }
+    }
+
+    private void cleanupExpired() {
+        Instant now = Instant.now();
+        entries.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
     }
 
     private String key(Long userId, String sessionId, String requestId) {
