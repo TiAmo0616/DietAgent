@@ -70,6 +70,9 @@ public class ClarifyAgentService {
             // 提取 Agent 返回的追问文案并 trim
             String question = response.getTextContent() == null ? "" : response.getTextContent().trim();
             // LLM 返回空文本时，用 ClarifyRule 模板追问兜底
+            if (question.length() > 300) {
+                question = question.substring(0, 300).trim();
+            }
             if (question.isBlank()) {
                 question = clarifyRuleService.fallbackQuestion(missingSlots);
             }

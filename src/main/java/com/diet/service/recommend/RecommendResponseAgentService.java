@@ -152,6 +152,9 @@ public class RecommendResponseAgentService {
         JsonNode root = llmJsonService.parseObject(content);                              // 提取 JSON 根节点
         List<RecommendedMealOption> options = parseOptions(root.path("recommendations"), topMeals, slots); // 解析推荐数组
         String speechText = root.path("speechText").asText("").trim();                    // 读取口语回复
+        if (speechText.length() > 1000) {
+            speechText = speechText.substring(0, 1000).trim();
+        }
         if (speechText.isBlank()) {
             speechText = templateSpeech(new RecommendResult(options, needsDisclaimer(slots))); // 空则用模板
         }
