@@ -92,6 +92,22 @@ CREATE TABLE `diet_sessions`  (
 -- ----------------------------
 
 -- ----------------------------
+-- Table structure for diet_user_memory
+-- ----------------------------
+DROP TABLE IF EXISTS `diet_user_memory`;
+CREATE TABLE `diet_user_memory` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `user_id` bigint NOT NULL,
+  `memory_key` varchar(64) NOT NULL,
+  `memory_value` varchar(128) NOT NULL,
+  `source` varchar(64) NOT NULL,
+  `updated_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_memory_value` (`user_id`, `memory_key`, `memory_value`),
+  KEY `idx_user_memory` (`user_id`, `updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
 -- Table structure for diet_slot_option
 -- ----------------------------
 DROP TABLE IF EXISTS `diet_slot_option`;

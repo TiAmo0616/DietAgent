@@ -26,6 +26,7 @@ import com.diet.service.clarify.ClarifyAgentService;
 import com.diet.service.meal.MealRankService;
 import com.diet.service.meal.MealSearchService;
 import com.diet.service.meal.MealService;
+import com.diet.service.memory.UserMemoryService;
 import com.diet.service.plan.MealPlanService;
 import com.diet.service.plan.PlanResponseAgentService;
 import com.diet.service.recommend.RecommendResponseAgentService;
@@ -138,6 +139,8 @@ public class DietOrchestratorService {
 
     private final ContextAssembler contextAssembler;
 
+    private final UserMemoryService userMemoryService;
+
     /**
      * 会话级锁 Map，key=sessionId，value=锁对象，保证同 session 串行写状态。
      */
@@ -163,11 +166,13 @@ public class DietOrchestratorService {
             AgentTraceService agentTraceService,
             SkillOrchestrationService skillOrchestrationService,
             DietToolRegistry dietToolRegistry,
-            ContextAssembler contextAssembler
+            ContextAssembler contextAssembler,
+            UserMemoryService userMemoryService
     ) {
         this.skillOrchestrationService = skillOrchestrationService;
         this.dietToolRegistry = dietToolRegistry;
         this.contextAssembler = contextAssembler;
+        this.userMemoryService = userMemoryService;
         this.sessionService = sessionService;                           // 注入消息落库服务
         this.sessionStateService = sessionStateService;                 // 注入会话状态服务
         this.intentAgentService = intentAgentService;                   // 注入意图识别服务
@@ -256,8 +261,13 @@ public class DietOrchestratorService {
 
         // 意图识别：调用 IntentAgent：传入 sessionId、userId、用户原文、历史槽位、最近 3 条对话摘要
         List<com.diet.model.ConversationTurn> recentTurns = sessionService.recentConversationTurns(sessionId, userId, 3);
+        Map<String, Object> requestContext = new LinkedHashMap<>();
+        if (request.context() != null) {
+            requestContext.putAll(request.context());
+        }
+        requestContext.put("longTermPreferences", userMemoryService.load(userId));
         ContextSnapshot context = contextAssembler.assemble(
-                request.message(), state.slots(), state, recentTurns, request.context());
+                request.message(), state.slots(), state, recentTurns, requestContext);
         agentTraceService.recordEvent("CONTEXT_ASSEMBLED", "CONTEXT",
                 request.message(), Map.of("layers", List.of("CURRENT_REQUEST", "SESSION_STATE", "RECENT_TURNS", "REQUEST_CONTEXT"),
                         "estimatedTokens", context.estimatedTokens(),
@@ -304,6 +314,7 @@ public class DietOrchestratorService {
                                               SkillExecutionContext skillContext) {
         // 将历史 slots 与 IntentAgent 本轮识别的 slots 合并（本轮非空覆盖，本轮空保留历史）
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
+        userMemoryService.learnFromSlots(userId, mergedSlots, "RULE_VALIDATED_SLOT");
 
         // Trace 事件：SLOTS_MERGED | 阶段 SLOT | 输入=stateSlots+intentSlots | 输出=mergedSlots
         agentTraceService.recordEvent("SLOTS_MERGED", "SLOT", Map.of("stateSlots", state.slots(), "intentSlots", intent.slots()), mergedSlots);
@@ -352,6 +363,7 @@ public class DietOrchestratorService {
                                       SkillExecutionContext skillContext) {
         // 合并历史槽位与本轮 IntentAgent 识别的槽位
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
+        userMemoryService.learnFromSlots(userId, mergedSlots, "RULE_VALIDATED_SLOT");
 
         // 从会话状态取出本会话已推荐过的 mealId 列表，供换一批时累积排除
         List<Long> excludeMealIds = state.lastRecommendations() == null ? List.of() : state.lastRecommendations();
@@ -375,6 +387,7 @@ public class DietOrchestratorService {
                                     SkillExecutionContext skillContext) {
         // 合并历史槽位与本轮槽位（共享口味/健康诉求等；mealTime 会在拆分时按餐次覆盖）
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
+        userMemoryService.learnFromSlots(userId, mergedSlots, "RULE_VALIDATED_SLOT");
         List<String> planMealTimes = mealPlanService.resolveMealTimes(mergedSlots);
         // 规划态 slots 显式写入目标餐次，便于后续轮次与 Trace 观察
         SlotBundle planSlots = new SlotBundle(

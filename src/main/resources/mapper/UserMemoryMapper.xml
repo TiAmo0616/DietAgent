@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.diet.mapper.UserMemoryMapper">
+    <resultMap id="UserMemoryRowMap" type="com.diet.model.UserMemoryRow">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="memoryKey" column="memory_key"/>
+        <result property="memoryValue" column="memory_value"/>
+        <result property="source" column="source"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="listByUser" resultMap="UserMemoryRowMap">
+        SELECT id, user_id, memory_key, memory_value, source, updated_at
+        FROM diet_user_memory
+        WHERE user_id = #{userId}
+        ORDER BY updated_at DESC, id DESC
+    </select>
+
+    <insert id="upsert" parameterType="com.diet.model.UserMemoryRow">
+        INSERT INTO diet_user_memory (user_id, memory_key, memory_value, source, updated_at)
+        VALUES (#{userId}, #{memoryKey}, #{memoryValue}, #{source}, NOW())
+        ON DUPLICATE KEY UPDATE
+            memory_value = VALUES(memory_value),
+            source = VALUES(source),
+            updated_at = NOW()
+    </insert>
+</mapper>
