@@ -11,10 +11,12 @@ class RequestIdempotencyServiceTest {
     void returnsStoredResponseOnlyForSameOwnerAndRequest() {
         RequestIdempotencyService service = new RequestIdempotencyService(600);
         ChatResponse response = ChatResponse.answer("s1", "ok", null, "DONE");
-        service.store(7L, "s1", "req-1", response);
+        service.store(7L, "s1", "req-1", "fingerprint-1", response);
 
-        assertEquals(response, service.find(7L, "s1", "req-1").orElseThrow());
-        assertTrue(service.find(8L, "s1", "req-1").isEmpty());
-        assertTrue(service.find(7L, "s2", "req-1").isEmpty());
+        assertEquals(response, service.find(7L, "s1", "req-1", "fingerprint-1").orElseThrow());
+        assertTrue(service.find(8L, "s1", "req-1", "fingerprint-1").isEmpty());
+        assertTrue(service.find(7L, "s2", "req-1", "fingerprint-1").isEmpty());
+        org.junit.jupiter.api.Assertions.assertThrows(com.diet.exception.DietException.class,
+                () -> service.find(7L, "s1", "req-1", "fingerprint-2"));
     }
 }

@@ -223,7 +223,8 @@ public class DietOrchestratorService {
                 // 获取或创建该 sessionId 对应的锁对象，保证同一 session 并发请求串行执行
                 Object lock = sessionLocks.computeIfAbsent(initialState.sessionId(), key -> new Object());
                 synchronized (lock) {
-                    var cachedResponse = idempotencyService.find(userId, initialState.sessionId(), request.requestId());
+                    String requestFingerprint = request.message() + "|" + request.sourceMode();
+                    var cachedResponse = idempotencyService.find(userId, initialState.sessionId(), request.requestId(), requestFingerprint);
                     if (cachedResponse.isPresent()) {
                         agentTraceService.recordEvent("REQUEST_DEDUPLICATED", "IDEMPOTENCY",
                                 request.requestId(), Map.of("sessionId", initialState.sessionId()));
@@ -231,7 +232,7 @@ public class DietOrchestratorService {
                     }
                     // 在锁内执行完整状态机，处理本轮用户输入
                     ChatResponse response = handleTurn(userId, request, traceId, initialState);
-                    idempotencyService.store(userId, initialState.sessionId(), request.requestId(), response);
+                    idempotencyService.store(userId, initialState.sessionId(), request.requestId(), requestFingerprint, response);
                     // Trace 事件：REQUEST_FINISHED | 阶段 HTTP | 输入=ChatRequest | 输出=ChatResponse | 耗时 ms
                     agentTraceService.recordEvent("REQUEST_FINISHED", "HTTP", request, response, elapsedMs(startedAt));
                     // 将最终响应返回给 Controller
